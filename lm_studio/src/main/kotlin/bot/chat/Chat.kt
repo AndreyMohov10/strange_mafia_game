@@ -1,55 +1,63 @@
 package bot.chat
 
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.plugins.timeout
-import io.ktor.client.request.*
-import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
-import io.ktor.http.contentType
-import io.ktor.http.isSuccess
-import kotlinx.io.IOException
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import org.springframework.http.HttpHeaders
+import org.springframework.http.MediaType
+import org.springframework.http.client.SimpleClientHttpRequestFactory
+import org.springframework.web.client.RestClient
+import java.time.Duration
 
 @Suppress("unused")
 class Chat(
-    private val client: HttpClient,
-    private val host: String, private val token: String,
-    private val model: String, private val role: String
+    host: String,
+    token: String,
+    private val model: String,
+    private val role: String,
+    restClient: RestClient? = null
 ) {
     private var prevMessageId: String? = null
-    suspend fun answerMessage(prompt: String): ChatResponse? {
+
+    private val client: RestClient = restClient ?: RestClient.builder()
+        .baseUrl(host)
+        .requestFactory(SimpleClientHttpRequestFactory().apply {
+            setConnectTimeout(Duration.ofSeconds(60))
+            setReadTimeout(Duration.ofSeconds(1000))
+        })
+        .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer $token")
+        .build()
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
+
+    fun answerMessage(prompt: String): ChatResponse? {
         try {
             val requestBody = ChatRequest(
                 model = model,
                 input = prompt,
                 previousResponseId = prevMessageId
             )
+            val requestJson = json.encodeToString(requestBody)
 
-            val response = client.post("$host/chat") {
-                header(HttpHeaders.Authorization, "Bearer $token")
-                header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-                contentType(ContentType.Application.Json)
-                setBody(requestBody)
-                timeout {
-                    requestTimeoutMillis = 100000
-                    socketTimeoutMillis = 100000
-                }
-            }
+            val responseBody = client.post()
+                .uri("/chat")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(requestJson)
+                .retrieve()
+                .body(String::class.java) ?: return null
 
-            if (response.status.isSuccess()) {
-                val ans = response.body<ChatApiResponse>()
-                val message = ans.output.filter { it is MessageOutput }
-                    .joinToString(separator = "\n") { (it as MessageOutput).content }
-                prevMessageId = ans.responseId
-                return ChatResponse(message)
-            }
-        } catch (e: IOException) {
-            System.err.println("произошла ошибка $e")
+            val ans = json.decodeFromString<ChatApiResponse>(responseBody)
+            val message = ans.output.filterIsInstance<MessageOutput>()
+                .joinToString(separator = "\n") { it.content }
+            prevMessageId = ans.responseId
+            return ChatResponse(message)
         } catch (e: InterruptedException) {
             throw e
         } catch (e: Exception) {
-            System.err.println("произошла неожиданная ошибка $e")
+            System.err.println("произошла ошибка при отправке сообщения в LMStudio: $e")
+            throw e
         }
-        return null
     }
 }

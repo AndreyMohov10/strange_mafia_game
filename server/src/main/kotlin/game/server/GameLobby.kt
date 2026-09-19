@@ -13,8 +13,14 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentMap
 import java.util.concurrent.ConcurrentSkipListSet
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.stereotype.Service
 
-class GameLobby(parentScope: CoroutineScope, private val games: Games) : CoroutineScope by parentScope {
+@Service
+class GameLobby(
+    @Qualifier("applicationCoroutineScope") parentScope: CoroutineScope,
+    private val games: Games
+) : CoroutineScope by parentScope {
     private val game: ConcurrentMap<GameId, GameStart> = ConcurrentHashMap()
 
     suspend fun joinGame(userId: String, gameId: GameId): Boolean {

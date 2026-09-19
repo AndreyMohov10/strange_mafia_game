@@ -1,7 +1,12 @@
+import java.util.Properties
+
 plugins {
-    kotlin("jvm") version "2.2.10"
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.kotlin.spring)
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.spring.dependency.management)
     application
-    kotlin("plugin.serialization") version "2.2.10"
+    alias(libs.plugins.kotlin.serialization)
 }
 
 repositories {
@@ -9,16 +14,17 @@ repositories {
 }
 
 dependencies {
-    implementation(kotlin("stdlib"))
-    implementation("io.ktor:ktor-client-cio:3.4.0")
-    implementation("io.ktor:ktor-client-content-negotiation:3.4.0")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.4.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.0")
-    implementation("org.telegram:telegrambots-client:9.6.0")
-    implementation("org.telegram:telegrambots-longpolling:9.6.0")
+    implementation(libs.kotlin.stdlib)
+    implementation(libs.spring.boot.starter)
+    implementation(libs.spring.boot.starter.websocket)
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.serialization.core)
+    implementation(libs.telegrambots.client)
+    implementation(libs.telegrambots.longpolling)
     implementation(project(":domain"))
-    testImplementation(kotlin("test"))
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.spring.boot.starter.test)
 }
 
 tasks.withType<JavaCompile> {
@@ -26,7 +32,7 @@ tasks.withType<JavaCompile> {
 }
 
 application {
-    mainClass.set("MainKt")
+    mainClass.set("game.client.ClientApplicationKt")
 }
 
 tasks.test {
@@ -35,4 +41,24 @@ tasks.test {
 
 kotlin {
     jvmToolchain(23)
+}
+
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+    compilerOptions {
+        javaParameters.set(true)
+    }
+}
+
+val envFile = rootProject.file(".env")
+val envProps = Properties()
+if (envFile.exists()) {
+    envFile.inputStream().use { envProps.load(it) }
+}
+
+tasks.withType<org.springframework.boot.gradle.tasks.run.BootRun> {
+    if (envFile.exists()) {
+        envProps.stringPropertyNames().forEach { key ->
+            environment(key, envProps.getProperty(key))
+        }
+    }
 }

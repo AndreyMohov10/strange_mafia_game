@@ -6,11 +6,13 @@ import game.domain.GameState
 import game.domain.Phase
 import jooq.Tables.GAME_CONFIGS
 import jooq.tables.GameStates.GAME_STATES
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.jooq.DSLContext
 import org.jooq.JSONB
+import org.springframework.stereotype.Repository
 
-
+@Repository
 class GameStateRepository(private val dsl: DSLContext) {
     fun createGame(state: GameState) {
         dsl.transaction { trx ->

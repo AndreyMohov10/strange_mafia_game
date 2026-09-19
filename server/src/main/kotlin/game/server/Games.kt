@@ -28,14 +28,18 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.stereotype.Service
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 import kotlin.random.Random
 
+@Service
 class Games(
-    parentScope: CoroutineScope, private val chatCreator: (Int) -> Chat,
+    @Qualifier("applicationCoroutineScope") parentScope: CoroutineScope,
+    private val chatCreator: (Int) -> Chat,
     private val database: GameStateRepository
 ) : CoroutineScope by parentScope {
     val games = ConcurrentHashMap<GameId, Game>()

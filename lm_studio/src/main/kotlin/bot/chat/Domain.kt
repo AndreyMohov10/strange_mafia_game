@@ -1,6 +1,5 @@
 package bot.chat
 
-import kotlinx.serialization.Polymorphic
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -23,7 +22,6 @@ data class ChatApiResponse(
 )
 
 @Serializable
-@Polymorphic
 sealed class OutputItem
 
 @Serializable
@@ -43,10 +41,9 @@ class Reasoning : OutputItem()
 @Serializable
 @SerialName("invalid_tool_call")
 @Suppress("unused")
-class InvalidCall : OutputItem()
+class InvalidToolCall : OutputItem()
 
 @Serializable
-@Polymorphic
 sealed class Model
 
 @Serializable

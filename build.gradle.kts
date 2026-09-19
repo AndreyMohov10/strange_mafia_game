@@ -1,5 +1,9 @@
 plugins {
-    kotlin("jvm") version "2.2.10"
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.spring.boot) apply false
+    alias(libs.plugins.spring.dependency.management) apply false
+    alias(libs.plugins.kotlin.spring) apply false
+    alias(libs.plugins.kotlin.serialization) apply false
 }
 
 group = "org.example"
@@ -18,9 +22,9 @@ tasks.test {
 }
 
 tasks.register("runServer") {
-    dependsOn(":server:run")
+    dependsOn(":server:bootRun")
 }
 
 tasks.register("runClient") {
-    dependsOn(":telegram_client:run")
+    dependsOn(":telegram_client:bootRun")
 }

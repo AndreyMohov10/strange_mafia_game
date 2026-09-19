@@ -4,13 +4,16 @@ import org.jooq.meta.jaxb.Generate
 import org.jooq.meta.jaxb.Database
 import org.jooq.meta.jaxb.Jdbc
 import org.jooq.meta.jaxb.Generator
-import groovy.json.JsonSlurper
+import java.util.Properties
 
 plugins {
-    kotlin("jvm") version "2.2.10"
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.jooq)
+    alias(libs.plugins.kotlin.spring)
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.spring.dependency.management)
     application
-    kotlin("plugin.serialization") version "2.2.10"
-    id("nu.studer.jooq") version "10.2"
+    alias(libs.plugins.kotlin.serialization)
     id("java")
 }
 
@@ -19,36 +22,42 @@ repositories {
 }
 
 dependencies {
-    implementation(kotlin("stdlib"))
-    implementation("io.ktor:ktor-client-cio:3.4.0")
-    implementation("io.ktor:ktor-client-content-negotiation:3.4.0")
-    implementation("io.ktor:ktor-serialization-kotlinx-json:3.4.0")
-    implementation("io.ktor:ktor-server-core:3.5.0")
-    implementation("io.ktor:ktor-server-netty:3.5.0")
-    implementation("io.ktor:ktor-server-websockets:3.4.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-core:1.6.0")
-    implementation("org.jooq:jooq:3.19.18")
-    implementation("org.postgresql:postgresql:42.7.7")
+    implementation(libs.kotlin.stdlib)
+    implementation(libs.spring.boot.starter.web)
+    implementation(libs.spring.boot.starter.websocket)
+    implementation(libs.spring.boot.starter.jooq)
+    implementation(libs.postgresql)
+    implementation(libs.jooq)
+    jooqGenerator(libs.postgresql)
 
-    jooqGenerator("org.postgresql:postgresql:42.7.7")
-    jooqGenerator("org.jooq:jooq-meta:3.19.7")
-    jooqGenerator("org.jooq:jooq-codegen:3.19.7")
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.serialization.core)
 
     implementation(project(":domain"))
     implementation(project(":lm_studio"))
-    testImplementation(kotlin("test"))
+    testImplementation(libs.spring.boot.starter.test)
+    testImplementation(libs.kotlin.test)
 }
 
+val envFile = rootProject.file(".env")
+val envProps = Properties()
+if (envFile.exists()) {
+    envFile.inputStream().use { envProps.load(it) }
+}
+fun getEnv(key: String, fallback: String): String =
+    System.getenv(key) ?: envProps.getProperty(key, fallback)
 
-val sqlConfig = JsonSlurper().parse(File(".secret/sql_config.json")) as Map<*, *>
+val dbUrl = getEnv("DB_URL", getEnv("SPRING_DATASOURCE_URL", "jdbc:postgresql://localhost:5433/mafia_game"))
+val dbUser = getEnv("DB_USER", getEnv("SPRING_DATASOURCE_USERNAME", "postgres"))
+val dbPassword = getEnv("DB_PASSWORD", getEnv("SPRING_DATASOURCE_PASSWORD", "1234"))
 
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
 }
 
 jooq {
-    version.set("3.19.18")
+    version.set(libs.versions.jooq)
     edition.set(nu.studer.gradle.jooq.JooqEdition.OSS)
 
     configurations {
@@ -60,9 +69,9 @@ jooq {
 
                 jdbc = Jdbc().apply {
                     driver = "org.postgresql.Driver"
-                    url = sqlConfig["url"].toString()
-                    user = sqlConfig["user"].toString()
-                    password = sqlConfig["password"].toString()
+                    url = dbUrl
+                    user = dbUser
+                    password = dbPassword
                 }
 
                 generator = Generator().apply {
@@ -103,7 +112,11 @@ sourceSets.main {
 }
 
 application {
-    mainClass.set("MainKt")
+    mainClass.set("game.server.ServerApplicationKt")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 kotlin {
@@ -111,5 +124,15 @@ kotlin {
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-    dependsOn(tasks.named("generateJooq"))
+    compilerOptions {
+        javaParameters.set(true)
+    }
+}
+
+tasks.withType<org.springframework.boot.gradle.tasks.run.BootRun> {
+    if (envFile.exists()) {
+        envProps.stringPropertyNames().forEach { key ->
+            environment(key, envProps.getProperty(key))
+        }
+    }
 }
