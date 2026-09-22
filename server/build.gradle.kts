@@ -1,12 +1,7 @@
-import org.jooq.meta.jaxb.Logging
-import org.jooq.meta.jaxb.Target
-import org.jooq.meta.jaxb.Generate
-import org.jooq.meta.jaxb.Database
-import org.jooq.meta.jaxb.Jdbc
-import org.jooq.meta.jaxb.Generator
 import java.util.Properties
 
 plugins {
+    id("org.flywaydb.flyway") version "10.7.1"
     alias(libs.plugins.kotlin.jvm)
     alias(libs.plugins.jooq)
     alias(libs.plugins.kotlin.spring)
@@ -21,16 +16,20 @@ repositories {
     mavenCentral()
 }
 
+
 dependencies {
     implementation(libs.kotlin.stdlib)
-    implementation(libs.spring.boot.starter.web)
+    implementation(libs.spring.boot.starter.webflux)
     implementation(libs.spring.boot.starter.websocket)
     implementation(libs.spring.boot.starter.jooq)
     implementation(libs.postgresql)
     implementation(libs.jooq)
+    implementation(libs.flyway.core)
+    implementation(libs.flyway.database.postgresql)
     jooqGenerator(libs.postgresql)
 
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.reactor)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.core)
 
@@ -56,50 +55,53 @@ tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
 }
 
+flyway {
+    url = dbUrl
+    user = dbUser
+    password = dbPassword
+    locations = arrayOf("filesystem:src/main/resources/db/migration")
+}
+
 jooq {
     version.set(libs.versions.jooq)
     edition.set(nu.studer.gradle.jooq.JooqEdition.OSS)
 
     configurations {
         create("main") {
-            generateSchemaSourceOnCompilation.set(true)
+            generateSchemaSourceOnCompilation.set(false)
 
             jooqConfiguration.apply {
-                logging = Logging.WARN
-
-                jdbc = Jdbc().apply {
-                    driver = "org.postgresql.Driver"
+                jdbc.apply {
                     url = dbUrl
                     user = dbUser
                     password = dbPassword
                 }
-
-                generator = Generator().apply {
+                generator.apply {
                     name = "org.jooq.codegen.DefaultGenerator"
-
-                    database = Database().apply {
+                    database.apply {
                         name = "org.jooq.meta.postgres.PostgresDatabase"
                         inputSchema = "public"
                     }
-
-                    generate = Generate().apply {
-                        isDeprecated = false
-                        isRecords = true
-                        isImmutablePojos = false
-                        isFluentSetters = true
-                        isDaos = false
-                        isPojos = true
-                        isJavaTimeTypes = true
-                    }
-
-                    target = Target().apply {
-                        packageName = "jooq"
+                    target.apply {
+                        packageName = "com.example.jooq.generated"
                         directory = "build/generated/jooq"
                     }
                 }
             }
         }
     }
+}
+
+tasks.named("generateJooq") {
+    dependsOn(tasks.named("flywayMigrate"))
+}
+
+tasks.named("compileJava") {
+    dependsOn(tasks.named("generateJooq"))
+}
+
+tasks.named("compileKotlin") {
+    dependsOn(tasks.named("generateJooq"))
 }
 
 tasks.test {

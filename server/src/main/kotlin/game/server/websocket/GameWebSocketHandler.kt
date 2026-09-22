@@ -1,14 +1,15 @@
 package game.server.websocket
 
+import game.domain.EventNotification
 import game.domain.GameId
 import game.server.GameLobby
-import game.server.GameStateRepository
+import game.server.db.GameStateRepository
 import game.server.Games
-import kotlinx.coroutines.CompletableDeferred
+import game.server.auth.AuthService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
@@ -26,12 +27,12 @@ class GameWebSocketHandler(
     private val games: Games,
     private val lobby: GameLobby,
     private val database: GameStateRepository,
+    private val authService: AuthService,
     private val scope: CoroutineScope
 ) : TextWebSocketHandler() {
 
     private val json = Json {
         ignoreUnknownKeys = true
-        classDiscriminator = "type"
         encodeDefaults = true
         prettyPrint = false
     }
@@ -45,9 +46,28 @@ class GameWebSocketHandler(
         return if (idStr.isNotEmpty()) GameId(idStr) else null
     }
 
+    private fun extractToken(session: WebSocketSession): String? {
+        val query = session.uri?.query
+        if (!query.isNullOrBlank()) {
+            val tokenParam = query.split("&")
+                .firstOrNull { it.startsWith("token=") }
+                ?.substringAfter("token=")
+            if (!tokenParam.isNullOrBlank()) return tokenParam
+        }
+        return session.handshakeHeaders.getFirst("Authorization")
+            ?: session.handshakeHeaders.getFirst("token")
+    }
+
     override fun afterConnectionEstablished(session: WebSocketSession) {
         val gameId = extractGameId(session) ?: run {
             session.close(CloseStatus.BAD_DATA)
+            return
+        }
+
+        val rawToken = extractToken(session)
+        val principal = authService.resolveUser(rawToken)
+        if (principal == null) {
+            session.close(CloseStatus.POLICY_VIOLATION)
             return
         }
 
@@ -71,41 +91,28 @@ class GameWebSocketHandler(
                     return@launch
                 }
 
-                val stateSenderJob = CompletableDeferred<Unit>()
-                val subscriberJob = launch {
-                    game.createSubscriber({ state ->
-                        launch {
-                            try {
-                                val text = json.encodeToString(state)
-                                if (safeSession.isOpen) {
-                                    safeSession.sendMessage(TextMessage(text))
-                                }
-                                stateSenderJob.complete(Unit)
-                            } catch (_: Exception) {
-                                this.cancel()
-                            }
-                        }
-                    }) { event ->
-                        try {
-                            stateSenderJob.await()
-                            val text = json.encodeToString(event)
-                            if (safeSession.isOpen) {
-                                safeSession.sendMessage(TextMessage(text))
-                            }
-                        } catch (_: Exception) {
-                            this.cancel()
-                        }
-                    }
+                val latest = game.getLatestEventIndex()
+                if (latest >= 0 && safeSession.isOpen) {
+                    val initialNotification = EventNotification(
+                        gameId = gameId.id,
+                        eventIndex = latest
+                    )
+                    safeSession.sendMessage(TextMessage(json.encodeToString(initialNotification)))
                 }
 
-                stateSenderJob.await()
-
-                try {
-                    while (game.running && safeSession.isOpen && isActive) {
-                        kotlinx.coroutines.delay(1000)
+                game.flow.takeWhile { isActive && safeSession.isOpen }.collect { event ->
+                    try {
+                        val notification = EventNotification(
+                            gameId = gameId.id,
+                            eventIndex = event.eventIndex
+                        )
+                        val text = json.encodeToString(notification)
+                        if (safeSession.isOpen) {
+                            safeSession.sendMessage(TextMessage(text))
+                        }
+                    } catch (_: Exception) {
+                        cancel()
                     }
-                } finally {
-                    subscriberJob.cancelAndJoin()
                 }
             } catch (_: Exception) {
             } finally {
@@ -118,19 +125,6 @@ class GameWebSocketHandler(
         }
 
         sessionJobs[session.id] = job
-    }
-
-    override fun handleTextMessage(session: WebSocketSession, message: TextMessage) {
-        val gameId = extractGameId(session) ?: return
-        val game = games.games[gameId] ?: return
-        try {
-            val payload = message.payload
-            val (userId, answer) = json.decodeFromString<Pair<String, String>>(payload)
-            scope.launch {
-                game.userAnswer(userId, answer)
-            }
-        } catch (_: Exception) {
-        }
     }
 
     override fun handleTransportError(session: WebSocketSession, exception: Throwable) {

@@ -1,6 +1,8 @@
 package game.server
 
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.onFailure
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.withTimeout
 import java.lang.AutoCloseable
 
@@ -19,13 +21,14 @@ class Player : AutoCloseable {
         return null
     }
 
-    suspend fun send(func: suspend () -> String) {
+    fun send(str: String): Boolean {
         try {
-            outputChannel.send(func())
+            outputChannel.trySendBlocking(str).onFailure { throw Exception("failed to send event") }
+            return true
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
-        } catch (_: Exception) {
         }
+        return false
     }
 
     override fun close() {

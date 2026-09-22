@@ -1,12 +1,15 @@
 package game.client
 
 import game.client.config.TelegramClientProperties
+import game.domain.ActionRequest
 import game.domain.Event
+import game.domain.EventNotification
 import game.domain.GameId
 import game.domain.GameState
-import game.domain.MessageEvent
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import org.springframework.http.HttpHeaders
+import org.springframework.http.MediaType
 import org.springframework.stereotype.Service
 import org.springframework.web.client.RestClient
 import org.springframework.web.socket.CloseStatus
@@ -24,7 +27,11 @@ class Client(
     properties: TelegramClientProperties
 ) {
     private val serverUrl = properties.serverUrl
-    private val restClient = RestClient.builder().baseUrl(serverUrl).build()
+    private val serverToken = properties.serverToken
+    private val restClient = RestClient.builder()
+        .baseUrl(serverUrl)
+        .defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer $serverToken")
+        .build()
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -44,6 +51,8 @@ class Client(
     ) : TextWebSocketHandler() {
         private var session: WebSocketSession? = null
         private var state: GameState? = null
+        private var lastProcessedEventIndex: Int = -1
+        private val fetchLock = Any()
 
         fun addUser(id: Long) {
             if (!userIds.contains(id)) {
@@ -60,23 +69,64 @@ class Client(
 
         override fun handleTextMessage(session: WebSocketSession, message: TextMessage) {
             val payload = message.payload
-            if (state == null) {
-                try {
-                    val localState = json.decodeFromString<GameState>(payload)
+            try {
+                val notification = json.decodeFromString<EventNotification>(payload)
+                fetchStateAndEvents(notification.eventIndex)
+            } catch (e: Exception) {
+                System.err.println("Ошибка при обработке EventNotification: $e")
+            }
+        }
+
+        private fun fetchState(): GameState? {
+            return try {
+                val response = restClient.get()
+                    .uri("/game/{gameId}/state", gameId.id)
+                    .retrieve()
+                    .toEntity(String::class.java)
+                if (response.statusCode.is2xxSuccessful && !response.body.isNullOrBlank()) {
+                    json.decodeFromString<GameState>(response.body!!)
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                System.err.println("Ошибка при запросе GameState для ${gameId.id}: $e")
+                null
+            }
+        }
+
+        private fun fetchEvents(from: Int, to: Int): List<Event> {
+            return try {
+                val response = restClient.get()
+                    .uri("/game/{gameId}/events?from={from}&to={to}", gameId.id, from, to)
+                    .retrieve()
+                    .toEntity(String::class.java)
+                if (response.statusCode.is2xxSuccessful && !response.body.isNullOrBlank()) {
+                    json.decodeFromString<List<Event>>(response.body!!)
+                } else {
+                    emptyList()
+                }
+            } catch (e: Exception) {
+                System.err.println("Ошибка при запросе событий [${from}..${to}] для ${gameId.id}: $e")
+                emptyList()
+            }
+        }
+
+        private fun fetchStateAndEvents(targetEventIndex: Int) {
+            synchronized(fetchLock) {
+                if (state == null) {
+                    val localState = fetchState() ?: return
                     state = localState
                     onStateGet(gameId, localState, userIds)
-                } catch (e: Exception) {
-                    System.err.println("Ошибка при обработке начального GameState: $e")
                 }
-            } else {
-                try {
-                    val event = json.decodeFromString<Event>(payload)
-                    if (event is MessageEvent && event.messageLength < state!!.history.size) {
-                        return
+
+                if (targetEventIndex > lastProcessedEventIndex) {
+                    val events = fetchEvents(lastProcessedEventIndex + 1, targetEventIndex)
+                    for (event in events) {
+                        if (event.eventIndex > lastProcessedEventIndex) {
+                            lastProcessedEventIndex = event.eventIndex
+                            onEvent(gameId, event)
+                        }
                     }
-                    onEvent(gameId, event)
-                } catch (e: Exception) {
-                    System.err.println("Ошибка при обработке события Event: $e")
                 }
             }
         }
@@ -87,17 +137,6 @@ class Client(
 
         override fun afterConnectionClosed(session: WebSocketSession, status: CloseStatus) {
             games.remove(gameId)
-        }
-
-        fun sendAnswer(answer: String, userId: Long) {
-            val payload = json.encodeToString(userId.toString() to answer)
-            session?.sendMessage(TextMessage(payload))
-        }
-
-        fun close() {
-            try {
-                session?.close()
-            } catch (_: Exception) {}
         }
     }
 
@@ -162,7 +201,7 @@ class Client(
             } else {
                 val cleanUrl = serverUrl.removePrefix("http://").removePrefix("https://")
                 val protocol = if (serverUrl.startsWith("https://")) "wss" else "ws"
-                val wsUri = "$protocol://$cleanUrl/game/${gameId.id}"
+                val wsUri = "$protocol://$cleanUrl/game/${gameId.id}?token=$serverToken"
 
                 val session = GameSession(gameId, CopyOnWriteArrayList(listOf(chatId)), onStateGet, onEvent)
                 session.connect(wsUri)
@@ -177,9 +216,21 @@ class Client(
     }
 
     suspend fun sendAnswer(gameId: GameId, userId: Long, answer: String?) {
-        val session = games[gameId]
-        if (answer != null && session != null) {
-            session.sendAnswer(answer, userId)
+        if (answer == null) return
+        try {
+            val actionRequest = ActionRequest(answer = answer, userId = userId.toString())
+            val response = restClient.post()
+                .uri("/game/{gameId}/action", gameId.id)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(json.encodeToString(actionRequest))
+                .retrieve()
+                .toBodilessEntity()
+
+            if (!response.statusCode.is2xxSuccessful) {
+                System.err.println("Ошибка при отправке действия: ${response.statusCode}")
+            }
+        } catch (e: Exception) {
+            System.err.println("Ошибка при отправке действия через REST API: $e")
         }
     }
 }

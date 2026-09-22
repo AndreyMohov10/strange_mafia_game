@@ -76,23 +76,6 @@ class TelegramBot(botToken: String, private val client: Client) :
         @OptIn(ExperimentalCoroutinesApi::class)
         suspend fun updater() {
             try {
-                state.history.forEach {
-                    for (i in 0..<state.config.playersNum) {
-                        val id = state.playersId[i].toLongOrNull()
-                        if (id == null || id !in ids) continue
-                        if (it.secret && !state.roles[i].getSecret()) continue
-                        else {
-                            val str = sendMessageToUser(it, i) ?: continue
-                            telegramClient.execute(
-                                SendMessage
-                                    .builder()
-                                    .chatId(id)
-                                    .text(str)
-                                    .build()
-                            )
-                        }
-                    }
-                }
                 while (state.day < state.config.artifacts) {
                     do {
                         if (state.playersId[state.player].toLongOrNull() !in ids) {
@@ -108,18 +91,21 @@ class TelegramBot(botToken: String, private val client: Client) :
                                 response = responseChannel.receive()
                             } while (!checkIfValidResponse(response))
 
-                            while (!state.ansValidator(response.second)) {
+                            var validationError = state.ansValidator(response.second)
+                            while (validationError != null) {
+                                val errorMessage = validationError.message ?: "Неправильный формат ввода"
                                 telegramClient.execute(
                                     SendMessage
                                         .builder()
                                         .chatId(longId)
-                                        .text("неправильный формат ввода попробуй еще раз")
+                                        .text("Ошибка: $errorMessage\nПопробуй еще раз:")
                                         .build()
                                 )
                                 telegramClient.execute(message)
                                 do {
                                     response = responseChannel.receive()
                                 } while (!checkIfValidResponse(response))
+                                validationError = state.ansValidator(response.second)
                             }
                             deferred.complete(response.second)
                         }
@@ -217,7 +203,15 @@ class TelegramBot(botToken: String, private val client: Client) :
                     SendMessage
                         .builder()
                         .chatId(chatId)
-                        .text("введи /create или /join чтобы начать или /help чтобы узнать правила")
+                        .parseMode("Markdown")
+                        .text(
+                            "Привет! Это игра *Странная мафия*.\n\n" +
+                            "Команды:\n" +
+                            "• `/create` - создать новую игру и получить ID для друзей\n" +
+                            "• `/join <ID>` - присоединиться к игре друзей по ID\n" +
+                            "• `/join` - присоединиться к случайной открытой игре\n" +
+                            "• `/help` - узнать правила игры"
+                        )
                         .build()
                 )
                 return
@@ -231,6 +225,7 @@ class TelegramBot(botToken: String, private val client: Client) :
                         .text(getDescription())
                         .build()
                 )
+                return
             }
 
             if (gameId != null) {
@@ -259,17 +254,30 @@ class TelegramBot(botToken: String, private val client: Client) :
                     SendMessage
                         .builder()
                         .chatId(chatId)
-                        .text(e.message!!)
+                        .text(e.message ?: "Ошибка подключения к игре")
                         .build()
                 )
                 return
             }
             gamesId[chatId.toString()] = serverId
+
+            val isCreate = messageText.trim().equals("/create", ignoreCase = true)
+            val successMessage = if (isCreate) {
+                "*Игра успешно создана!*\n\n" +
+                "ID твоей игры: `${serverId.id}`\n\n" +
+                "Отправь этот ID друзьям. Они смогут подключиться командой:\n" +
+                "`/join ${serverId.id}`\n\n" +
+                "Ожидаем подключения остальных игроков..."
+            } else {
+                "*Успешно подключились к игре!*\nID игры: `${serverId.id}`\nОжидаем старта игры..."
+            }
+
             telegramClient.execute(
                 SendMessage
                     .builder()
                     .chatId(chatId)
-                    .text("успешно подключились к игре")
+                    .parseMode("Markdown")
+                    .text(successMessage)
                     .build()
             )
         }

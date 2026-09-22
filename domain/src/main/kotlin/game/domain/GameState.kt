@@ -23,7 +23,6 @@ data class GameState(
     var phase: Phase = Phase.DAY_CONVERSATION,
     var day: Int = 0,
     var player: Int = 0,
-    val history: MutableList<Message> = mutableListOf(),
 ) {
     init {
         require(playersId.size == config.playersNum) {
@@ -50,7 +49,6 @@ data class GameState(
         if (!alive.contentEquals(other.alive)) return false
         if (!corrupted.contentEquals(other.corrupted)) return false
         if (phase != other.phase) return false
-        if (history != other.history) return false
 
         return true
     }
@@ -65,7 +63,6 @@ data class GameState(
         result = 31 * result + alive.contentHashCode()
         result = 31 * result + corrupted.contentHashCode()
         result = 31 * result + phase.hashCode()
-        result = 31 * result + history.hashCode()
         return result
     }
 }

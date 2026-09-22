@@ -9,28 +9,25 @@ import game.domain.GameId
 import game.domain.GameState
 import game.domain.Message
 import game.domain.MessageEvent
-import game.domain.Phase
 import game.domain.Role
+import game.helpers.aiPrompt
 import game.helpers.ansValidator
 import game.helpers.clone
-import game.helpers.description
+import game.helpers.getAiDescription
 import game.helpers.getSecret
-import game.helpers.getString
 import game.helpers.iteratePhase
-import game.helpers.outputFormatDescription
+import game.helpers.mergeMessagesForPrompt
 import game.helpers.randomChoice
+import game.server.db.GameEventRepository
+import game.server.db.GameStateRepository
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.BufferOverflow
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.takeWhile
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Service
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
@@ -40,7 +37,8 @@ import kotlin.random.Random
 class Games(
     @Qualifier("applicationCoroutineScope") parentScope: CoroutineScope,
     private val chatCreator: (Int) -> Chat,
-    private val database: GameStateRepository
+    private val database: GameStateRepository,
+    private val eventRepository: GameEventRepository
 ) : CoroutineScope by parentScope {
     val games = ConcurrentHashMap<GameId, Game>()
 
@@ -56,8 +54,11 @@ class Games(
     inner class Game {
         private val state: GameState
         val flow = MutableSharedFlow<Event>(
-            replay = 0, extraBufferCapacity = 20, onBufferOverflow = BufferOverflow.SUSPEND
+            replay = 0, extraBufferCapacity = 50, onBufferOverflow = BufferOverflow.SUSPEND
         )
+
+        private val eventCounter = AtomicInteger(0)
+        private val events = CopyOnWriteArrayList<Event>()
 
         private val bots: AtomicInteger
         private val botsChats: Array<Chat?>
@@ -68,7 +69,6 @@ class Games(
         var running: Boolean = true
         private val stateChangingLock = ReentrantLock(true)
 
-
         constructor(state: GameState) {
             this.state = state
             players = buildMap {
@@ -78,9 +78,11 @@ class Games(
             }.toMutableMap()
             bots = AtomicInteger(state.playersId.count { it.startsWith("bot") })
             botsChats = Array(state.config.playersNum) { null }
-            botsIndexRemembrance = Array(state.config.playersNum) {
-                0
-            }
+            botsIndexRemembrance = Array(state.config.playersNum) { 0 }
+            val existingEvents = eventRepository.getEvents(state.config.gameId)
+            events.addAll(existingEvents)
+            val nextIndex = existingEvents.maxOfOrNull { it.eventIndex }?.plus(1) ?: 0
+            eventCounter.set(nextIndex)
         }
 
         constructor(config: GameConfig, players: Set<String>) {
@@ -109,65 +111,60 @@ class Games(
             )
             bots = AtomicInteger(config.playersNum - players.size)
             botsChats = Array(state.config.playersNum) { null }
-            botsIndexRemembrance = Array(state.config.playersNum) {
-                0
+            botsIndexRemembrance = Array(state.config.playersNum) { 0 }
+        }
+
+        fun getLatestEventIndex(): Int = eventCounter.get() - 1
+
+        fun makeAction(userId: String, ans: String): Boolean {
+            val player = players[userId] ?: return false
+            return player.send(ans)
+        }
+
+        fun getState(): GameState {
+            return stateChangingLock.withLock {
+                state.clone()
             }
         }
 
-        suspend fun userAnswer(userId: String, ans: String) {
-            if (players[userId] == null) return
-            players[userId]!!.send { ans }
-        }
-
-        suspend fun createSubscriber(onState: (GameState) -> Unit, onEvent: suspend (Event) -> Unit) {
-            val channel = Channel<Event>(Channel.UNLIMITED)
-
-            val eventsJob = launch(start = CoroutineStart.UNDISPATCHED) {
-                try {
-                    flow.takeWhile { isActive }.collect { event ->
-                        channel.send(event)
-                    }
-                } finally {
-                    channel.close()
-                }
-            }
-
-            try {
-                stateChangingLock.withLock {
-                    onState(state.clone())
-                }
-
-                for (event in channel) {
-                    if (!isActive) break
-                    onEvent(event)
-                }
-            } finally {
-                eventsJob.cancelAndJoin()
-            }
-        }
-
-        private fun getDescription(): String {
-            return "роли: ${Role.entries.joinToString { it.getString() }}\n" +
-                    "стадии: ${Phase.entries.joinToString { "${it.getString()}: ${it.description()}" }}\n" +
-                    "конфигурация: ${state.config.description()}"
-        }
-
-        private fun getAiDescription(role: Role): String {
-            return "ты играешь в игру на подобии мафии твоя роль - ${role.getString()}\n" +
-                    "описание игры: ${getDescription()}\n" +
-                    "вместо системны будет игрок с номером 0"
-        }
-
-        private fun mergeMessages(messages: List<Message>, secret: Boolean): String {
-            return if (secret) {
-                messages.filter { it.userNum >= 0 || it.userNum == -state.player - 1 }
-                    .joinToString(separator = "\n") { "user_${it.userNum}: ${it.string}" }
+        fun getEvents(from: Int = 0, to: Int? = null, userId: String, isRoot: Boolean): List<Event> {
+            val allEvents = if (events.isNotEmpty() && events.first().eventIndex <= from) {
+                events.toList()
             } else {
-                messages
-                    .filter { it.userNum >= 0 || it.userNum == -state.player - 1 }
-                    .filter { !it.secret }
-                    .joinToString(separator = "\n") { "user_${it.userNum}: ${it.string}" }
+                val dbEvents = eventRepository.getEvents(state.config.gameId, from, to)
+                dbEvents.ifEmpty { events.toList() }
             }
+
+            val inRange = allEvents.filter { event ->
+                event.eventIndex >= from && (to == null || event.eventIndex <= to)
+            }
+
+            if (isRoot) {
+                return inRange
+            }
+
+            val playerIndex = state.playersId.indexOf(userId)
+            val canSeeSecret = playerIndex >= 0 && state.roles[playerIndex].getSecret()
+
+            return inRange.filter { event ->
+                when (event) {
+                    is MessageEvent -> {
+                        val msg = event.message
+                        if (msg.userNum < 0 && msg.userNum != -playerIndex - 1) {
+                            false
+                        } else if (msg.secret && !canSeeSecret) {
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                    is DisconnectEvent -> true
+                }
+            }
+        }
+
+        private fun getAllMessages(): List<Message> {
+            return events.filterIsInstance<MessageEvent>().map { it.message }
         }
 
         private suspend fun askPlayer(id: String, i: Int): String? {
@@ -178,56 +175,33 @@ class Games(
                     players.remove(id)?.close()
                     database.updateGameStatePlayersId(state)
                 }
-                flow.emit(DisconnectEvent(i))
+                val disconnectEvent = DisconnectEvent(
+                    index = i,
+                    eventIndex = eventCounter.getAndIncrement()
+                )
+                eventRepository.saveEvent(state.config.gameId, disconnectEvent)
+                events.add(disconnectEvent)
+                flow.emit(disconnectEvent)
             }
             return ans
         }
 
-        private fun getRoles(): String {
-            return buildString {
-                if (state.roles[state.player].getSecret()) {
-                    for (i in 0..<state.config.playersNum) {
-                        if (state.alive[i]) {
-                            appendLine("Игрок ${i + 1}: ${state.roles[i].getString()}")
-                        } else {
-                            appendLine("Игрок ${i + 1}: исключен")
-                        }
-                    }
-                } else {
-                    (0..<state.config.playersNum).filter { state.roles[it] == Role.MAFIA_HEAD }.forEach {
-                        appendLine("Игрок ${it + 1}: ${state.roles[it].getString()}")
-                    }
-                }
-            }
-        }
-
-        private fun aiPrompt(prompt: String): String {
-            return "предыдущие действия: $prompt\n " +
-                    "сейчас идет стадия ${state.phase.getString()}.\n" +
-                    "Роли игроков:\n" +
-                    getRoles() +
-                    "вывод должен быть представлен в виде " +
-                    "${state.phase.outputFormatDescription()}\n" +
-                    "Твой ход.\n" +
-                    "Играть нужно строго за себя и пытаться выдавать себя за мафию(если глава мафии говори прямо)\n" +
-                    "Если ты агент ни в коем случае не говори свою роль в отличии от обычной мафии " +
-                    "здесь агенты знают друг друга, а мафия агентов нет.\n" +
-                    "твоя роль ${state.roles[state.player]}.Не притворяйся главой мафии если ты не он.\n" +
-                    "ты игрок ${state.player + 1}\n" +
-                    "сообщения днем читают все, ночью - только агенты\n" +
-                    "тебе не нужно говорить длинно хватит 1-2 предложений\n" +
-                    "если формат не свободный то ты обязан вывести ровно одну строку в требуемом формате\n" +
-                    "если ты не соответствуешь формату выбор будет сделан случайно"
-        }
-
         suspend fun start() {
             try {
-                if (state.history.isEmpty()) {
+                if (events.isEmpty()) {
                     stateChangingLock.withLock {
-                        state.history.add(Message("игра начинается", 0, false))
                         database.createGame(state)
                     }
-                    flow.emit(MessageEvent(state.history[0], 0, 0))
+                    val initialMessage = Message("игра начинается", 0, false)
+                    val initialEvent = MessageEvent(
+                        message = initialMessage,
+                        seed = 0,
+                        messageLength = 0,
+                        eventIndex = eventCounter.getAndIncrement()
+                    )
+                    eventRepository.saveEvent(state.config.gameId, initialEvent)
+                    events.add(initialEvent)
+                    flow.emit(initialEvent)
                 }
                 while (state.day < state.config.artifacts) {
                     val id = state.playersId[state.player]
@@ -238,19 +212,20 @@ class Games(
                         val role = state.roles[state.player]
                         if (botsChats[index] == null) {
                             val chat = chatCreator(state.player)
-                            chat.answerMessage(getAiDescription(role))
+                            chat.answerMessage(state.getAiDescription(role))
                             botsChats[index] = chat
                         }
-                        val prompt = mergeMessages(
-                            state.history.drop(botsIndexRemembrance[index]), role.getSecret()
+                        val allMessages = getAllMessages()
+                        val prompt = state.mergeMessagesForPrompt(
+                            allMessages.drop(botsIndexRemembrance[index]), role.getSecret()
                         )
                         var ans: ChatResponse? = null
                         for (i in 0..2) {
                             ans = botsChats[index]!!.answerMessage(
-                                aiPrompt(prompt)
+                                state.aiPrompt(prompt)
                             )
                             if (ans != null) {
-                                if (!state.ansValidator(ans.message)) {
+                                if (state.ansValidator(ans.message) != null) {
                                     ans = null
                                 } else {
                                     break
@@ -259,7 +234,7 @@ class Games(
                         }
                         str = ans?.message ?: state.randomChoice()
 
-                        botsIndexRemembrance[index] = state.history.size + if (ans == null) 0 else 1
+                        botsIndexRemembrance[index] = allMessages.size + if (ans == null) 0 else 1
                     } else {
                         str = askPlayer(id, state.player) ?: if (bots.get() == state.config.playersNum - 1) {
                             return
@@ -267,14 +242,22 @@ class Games(
                             continue
                         }
                     }
-                    val oldSize = state.history.size
 
+                    val newMessages: List<Message>
                     stateChangingLock.withLock {
-                        state.iteratePhase(str, seed)
+                        newMessages = state.iteratePhase(str, seed)
                         database.updateGameState(state)
                     }
-                    for (i in oldSize..<state.history.size) {
-                        flow.emit(MessageEvent(state.history[i], seed, i))
+                    for (msg in newMessages) {
+                        val messageEvent = MessageEvent(
+                            message = msg,
+                            seed = seed,
+                            messageLength = events.size,
+                            eventIndex = eventCounter.getAndIncrement()
+                        )
+                        eventRepository.saveEvent(state.config.gameId, messageEvent)
+                        events.add(messageEvent)
+                        flow.emit(messageEvent)
                     }
                 }
                 games.remove(state.config.gameId)

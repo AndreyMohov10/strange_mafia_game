@@ -4,6 +4,14 @@ plugins {
     alias(libs.plugins.spring.dependency.management) apply false
     alias(libs.plugins.kotlin.spring) apply false
     alias(libs.plugins.kotlin.serialization) apply false
+    alias(libs.plugins.flyway) apply false
+}
+
+buildscript {
+    dependencies {
+        classpath(libs.flyway.database.postgresql)
+        classpath(libs.postgresql)
+    }
 }
 
 group = "org.example"

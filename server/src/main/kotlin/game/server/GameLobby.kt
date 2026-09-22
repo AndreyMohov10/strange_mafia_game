@@ -29,15 +29,15 @@ class GameLobby(
     }
 
     suspend fun joinGame(userId: String): GameId? {
-        val game = game.entries.first()
-        if (game.value.join(userId)) {
-            return game.key
+        val entry = game.entries.firstOrNull() ?: return null
+        if (entry.value.join(userId)) {
+            return entry.key
         }
         return null
     }
 
     fun createGame(userId: String, configBuilder: (GameId) -> GameConfig): String {
-        val id = GameId(UUID.randomUUID().toString())
+        val id = GameId(UUID.randomUUID().toString().replace("-", "").uppercase())
         val gameStarter = GameStart(configBuilder(id), userId)
         game[id] = gameStarter
         launch {

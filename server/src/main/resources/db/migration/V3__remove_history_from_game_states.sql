@@ -1,0 +1,1 @@
+ALTER TABLE game_states DROP COLUMN IF EXISTS history;
