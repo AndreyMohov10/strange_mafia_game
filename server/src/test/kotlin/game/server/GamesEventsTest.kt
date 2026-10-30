@@ -40,8 +40,6 @@ class GamesEventsTest {
             eventsList.add(
                 MessageEvent(
                     message = Message("message $i", i % 2, false),
-                    seed = 100L + i,
-                    messageLength = i,
                     eventIndex = i
                 )
             )
@@ -82,16 +80,12 @@ class GamesEventsTest {
         eventsList.add(
             MessageEvent(
                 message = Message("общий сбор", 0, secret = false),
-                seed = 1L,
-                messageLength = 0,
                 eventIndex = 0
             )
         )
         eventsList.add(
             MessageEvent(
                 message = Message("секрет агентов", 1, secret = true),
-                seed = 2L,
-                messageLength = 1,
                 eventIndex = 1
             )
         )

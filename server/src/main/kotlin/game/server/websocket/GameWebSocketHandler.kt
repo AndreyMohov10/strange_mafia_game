@@ -3,7 +3,6 @@ package game.server.websocket
 import game.domain.EventNotification
 import game.domain.GameId
 import game.server.GameLobby
-import game.server.db.GameStateRepository
 import game.server.Games
 import game.server.auth.AuthService
 import kotlinx.coroutines.CoroutineScope
@@ -26,7 +25,6 @@ import java.util.concurrent.ConcurrentHashMap
 class GameWebSocketHandler(
     private val games: Games,
     private val lobby: GameLobby,
-    private val database: GameStateRepository,
     private val authService: AuthService,
     private val scope: CoroutineScope
 ) : TextWebSocketHandler() {
@@ -77,14 +75,7 @@ class GameWebSocketHandler(
         val job = scope.launch {
             try {
                 lobby.awaitStart(gameId)
-                val game = games.games[gameId] ?: run {
-                    val savedState = database.loadGame(gameId)
-                    if (savedState != null) {
-                        games.Game(savedState)
-                    } else {
-                        null
-                    }
-                }
+                val game = games.games[gameId]
 
                 if (game == null) {
                     safeSession.close(CloseStatus.NOT_ACCEPTABLE)
@@ -92,7 +83,7 @@ class GameWebSocketHandler(
                 }
 
                 val latest = game.getLatestEventIndex()
-                if (latest >= 0 && safeSession.isOpen) {
+                if (safeSession.isOpen) {
                     val initialNotification = EventNotification(
                         gameId = gameId.id,
                         eventIndex = latest

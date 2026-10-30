@@ -8,7 +8,5 @@ import kotlinx.serialization.Serializable
 @Suppress("unused")
 data class MessageEvent(
     val message: Message,
-    val seed: Long,
-    val messageLength: Int,
     override val eventIndex: Int = 0
 ) : Event()

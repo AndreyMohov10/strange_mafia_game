@@ -69,12 +69,8 @@ class GameLobby(
                 repeat(config.playersNum - 1) {
                     withTimeout(config.loggingTimeout) {
                         val (userId, deferred) = joinChannel.receive()
-                        if (players.size < config.playersNum) {
-                            players.add(userId)
-                            deferred.complete(true)
-                        } else {
-                            deferred.complete(false)
-                        }
+                        players.add(userId)
+                        deferred.complete(true)
                     }
                 }
                 games.createGame(config, players)
@@ -84,8 +80,11 @@ class GameLobby(
                 games.createGame(config, players)
             } finally {
                 game.remove(config.gameId)
-                joinChannel.close()
                 startDeferred.complete(Unit)
+                joinChannel.close()
+                for ((_, deferred) in joinChannel) {
+                    deferred.complete(false)
+                }
             }
         }
 

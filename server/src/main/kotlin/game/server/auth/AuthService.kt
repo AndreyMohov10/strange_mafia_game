@@ -24,7 +24,7 @@ class AuthService(
 
     fun registerUser(username: String, preferredUserId: String? = null): AuthResponse {
         val cleanUsername = username.trim().ifEmpty { "Player" }
-        val userId = preferredUserId?.trim()?.takeIf { it.isNotEmpty() } ?: "user_${UUID.randomUUID().toString().take(8)}"
+        val userId = preferredUserId?.trim()?.takeIf { it.isNotEmpty() } ?: "user_${UUID.randomUUID()}"
         val token = "tok_${UUID.randomUUID().toString().replace("-", "")}"
 
         try {
@@ -34,7 +34,7 @@ class AuthService(
                 .set(USERS.TOKEN, token)
                 .execute()
         } catch (_: Exception) {
-            val fallbackId = "user_${UUID.randomUUID().toString().take(8)}"
+            val fallbackId = "user_${UUID.randomUUID()}"
             dsl.insertInto(USERS)
                 .set(USERS.ID, fallbackId)
                 .set(USERS.USERNAME, cleanUsername)

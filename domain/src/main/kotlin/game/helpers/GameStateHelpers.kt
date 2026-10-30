@@ -82,13 +82,13 @@ fun GameState.ansValidator(str: String): Exception? {
                     if (!alive[target - 1]) {
                         return IllegalArgumentException("Игрок $target уже исключен из игры")
                     }
+                    if (alive.count() - 1 <= config.team) {
+                        return IllegalArgumentException("после такого исключения нельзя будет составить команду")
+                    }
                     null
                 }
 
                 "проверить" -> {
-                    if (day == 0) {
-                        return IllegalArgumentException("В первый день нельзя проверить артефакт (вылазок еще не было)")
-                    }
                     if (target !in 1..day) {
                         return IllegalArgumentException("Нельзя проверить артефакт $target (доступны для проверки дни от 1 до $day)")
                     }
@@ -123,7 +123,7 @@ fun GameState.ansValidator(str: String): Exception? {
                 }
 
                 "вернуть" -> {
-                    if (target !in 1..(day + 1) || target > config.artifacts) {
+                    if (target !in 1..(day + 1)) {
                         return IllegalArgumentException("Артефакт $target не существует или еще не разыгран")
                     }
                     if (!stolenArtifacts[target - 1]) {
@@ -154,7 +154,7 @@ fun GameState.ansProcessor(str: String, seed: Long): List<Message> {
         Phase.TEAM_CREATING -> {
             val parts = s.split(",").mapNotNull { it.trim().toIntOrNull() }
             if (parts.size == config.team) {
-                stolenArtifacts[day] = parts.all { it in 1..config.playersNum && roles[it - 1] == Role.MAFIA }
+                stolenArtifacts[day] = parts.all { roles[it - 1] == Role.MAFIA }
             }
         }
 
@@ -173,9 +173,9 @@ fun GameState.ansProcessor(str: String, seed: Long): List<Message> {
                 } else if (parts[0] == "проверить" && int in 1..day) {
                     val real = if (stolenArtifacts[int - 1]) {
                         val success = Random(seed).nextDouble(0.0, 1.0)
-                        success > config.checkChance
+                        success < config.checkChance
                     } else {
-                        true
+                        false
                     }
                     if (real) {
                         messages.add(Message("артефакт был настоящий", 0, false))
@@ -213,8 +213,6 @@ fun GameState.iteratePhase(str: String, seed: Long): List<Message> {
     messages.add(Message(str, player + 1, phase.getSecret()))
     messages.addAll(ansProcessor(str, seed))
 
-    var loopGuard = 0
-    val maxLoops = config.playersNum * Phase.entries.size * 2 + 10
     do {
         player++
         if (player >= config.playersNum) {
@@ -224,8 +222,7 @@ fun GameState.iteratePhase(str: String, seed: Long): List<Message> {
                 day++
             }
         }
-        loopGuard++
-        if (day >= config.artifacts || loopGuard > maxLoops) {
+        if (day >= config.artifacts) {
             break
         }
     } while (!phaseValidator())
@@ -260,7 +257,7 @@ fun GameState.randomChoice(): String {
         Phase.DAY_CONCLUSION -> {
             val canCheck = day > 0
             val possiblePersons = (0..<config.playersNum).filter { alive[it] && roles[it] != Role.MAFIA_HEAD }.toList()
-            val action = if (canCheck && possiblePersons.isNotEmpty()) {
+            val action = if (canCheck && possiblePersons.size > config.team) {
                 listOf("проверить", "исключить").random()
             } else if (possiblePersons.isNotEmpty()) {
                 "исключить"

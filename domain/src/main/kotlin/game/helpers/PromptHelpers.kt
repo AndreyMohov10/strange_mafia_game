@@ -23,9 +23,6 @@ fun GameConfig.gameDescription(): String {
     }.trimEnd()
 }
 
-fun GameState.gameDescription(): String = config.gameDescription()
-
-
 fun getAiInitialPrompt(role: Role, config: GameConfig): String {
     return buildString {
         appendLine("Ты играешь в игру 'Странная мафия'. Твоя роль: ${role.getString().uppercase()}.")
@@ -112,12 +109,6 @@ fun formatMessagesForPrompt(
         }
     }
 }
-
-fun GameState.mergeMessagesForPrompt(
-    messages: List<Message>,
-    playerIndex: Int = player,
-    isSecret: Boolean = roles[playerIndex].getSecret()
-): String = formatMessagesForPrompt(messages, playerIndex, isSecret)
 
 fun GameState.mergeMessagesForPrompt(
     messages: List<Message>,
@@ -214,12 +205,4 @@ fun GameState.aiPrompt(
         appendLine()
         appendLine("ВНИМАНИЕ: выведи только требуемый ответ без кавычек, пояснений и лишнего текста.")
     }.trimEnd()
-}
-
-fun GameState.aiPrompt(
-    messages: List<Message>,
-    playerIndex: Int = player
-): String {
-    val formattedMessages = mergeMessagesForPrompt(messages, playerIndex)
-    return aiPrompt(formattedMessages, playerIndex)
 }

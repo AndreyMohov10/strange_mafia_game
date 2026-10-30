@@ -65,8 +65,6 @@ class AuthServiceTest {
     fun `events serialize with eventIndex and type discriminator`() {
         val event: Event = MessageEvent(
             message = Message("привет", 1, false),
-            seed = 12345L,
-            messageLength = 1,
             eventIndex = 5
         )
         val serialized = json.encodeToString(event)

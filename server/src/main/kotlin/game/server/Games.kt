@@ -192,20 +192,9 @@ class Games(
                     stateChangingLock.withLock {
                         database.createGame(state)
                     }
-                    val initialMessage = Message("игра начинается", 0, false)
-                    val initialEvent = MessageEvent(
-                        message = initialMessage,
-                        seed = 0,
-                        messageLength = 0,
-                        eventIndex = eventCounter.getAndIncrement()
-                    )
-                    eventRepository.saveEvent(state.config.gameId, initialEvent)
-                    events.add(initialEvent)
-                    flow.emit(initialEvent)
                 }
                 while (state.day < state.config.artifacts) {
                     val id = state.playersId[state.player]
-                    val seed = Random.nextLong()
                     val str: String
                     if (id.startsWith("bot")) {
                         val index = id.substringAfter("bot_").toInt()
@@ -236,23 +225,17 @@ class Games(
 
                         botsIndexRemembrance[index] = allMessages.size + if (ans == null) 0 else 1
                     } else {
-                        str = askPlayer(id, state.player) ?: if (bots.get() == state.config.playersNum - 1) {
-                            return
-                        } else {
-                            continue
-                        }
+                        str = askPlayer(id, state.player) ?: continue
                     }
 
                     val newMessages: List<Message>
                     stateChangingLock.withLock {
-                        newMessages = state.iteratePhase(str, seed)
+                        newMessages = state.iteratePhase(str, Random.nextLong())
                         database.updateGameState(state)
                     }
                     for (msg in newMessages) {
                         val messageEvent = MessageEvent(
                             message = msg,
-                            seed = seed,
-                            messageLength = events.size,
                             eventIndex = eventCounter.getAndIncrement()
                         )
                         eventRepository.saveEvent(state.config.gameId, messageEvent)
