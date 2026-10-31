@@ -146,7 +146,6 @@ fun GameState.ansProcessor(str: String, seed: Long): List<Message> {
     when (phase) {
         Phase.DAY_CONVERSATION -> {
             if (corrupted[player]) {
-                corrupted[player] = false
                 messages.add(Message("тебя шантажировали", -player - 1, false))
             }
         }
@@ -187,6 +186,9 @@ fun GameState.ansProcessor(str: String, seed: Long): List<Message> {
         }
 
         Phase.NIGHT_CONCLUSION -> {
+            for (i in (0..<config.playersNum)) {
+                corrupted[i] = false
+            }
             val parts = s.split("\\s+".toRegex())
             val int = parts.getOrNull(1)?.toIntOrNull()
             if (int != null) {
